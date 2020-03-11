@@ -135,7 +135,7 @@ double mysecond();
 int main(int argc, char *argv[])
 {
     int BytesPerWord, quantum;
-    int i, j, k, nthreads = 0;
+    int i, k;
 
     MPI_Init(NULL, NULL);
 
@@ -196,6 +196,7 @@ int main(int argc, char *argv[])
         {
             printf("MPI rank %d pinned on CPU %d\n", i, world_mpi_cpu_id[i]);
 #ifdef _OPENMP
+            int j;
             for(j = 0; j < num_threads; j++)
                 printf("    OpenMP Thread ID %d on CPU %d\n", j, world_omp_cpu_id[i][j]);   
 #endif
