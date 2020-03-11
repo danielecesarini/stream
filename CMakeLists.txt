@@ -10,21 +10,25 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Dependencies
-find_package(OpenMP REQUIRED C)
-add_library(stream_openmp_c INTERFACE)
-target_link_libraries(stream_openmp_c INTERFACE OpenMP::OpenMP_C)
-
 # Source files
 set(sources stream.c)
 
 # Add executable
 add_executable(stream ${sources})
-target_link_libraries(stream PRIVATE stream_openmp_c)
+
+# MPI
+find_package(MPI REQUIRED C)
+target_link_libraries(stream PRIVATE MPI::MPI_C)
+
+# OpenMP
+if(STREAM_ENABLE_OPENMP)
+  find_package(OpenMP REQUIRED C)
+  target_link_libraries(stream PRIVATE OpenMP::OpenMP_C)
+endif()
 
 # Install stream
 install(
 	TARGETS stream
 	RUNTIME DESTINATION bin
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib)
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib)

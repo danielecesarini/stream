@@ -7,7 +7,10 @@
 #include <time.h>
 #include <limits.h>
 #include <string.h>
-#include <omp.h>
+#include <mpi.h>
+#ifdef _OPENMP
+    #include <omp.h>
+#endif
 
 /*-----------------------------------------------------------------------
  * INSTRUCTIONS:
@@ -115,229 +118,261 @@ static char	*label[4] = {
     "Triad:     "
 };
 
+static double bytes[4] = {
+    2 * sizeof(STREAM_TYPE) * STREAM_ARRAY_SIZE,
+    2 * sizeof(STREAM_TYPE) * STREAM_ARRAY_SIZE,
+    3 * sizeof(STREAM_TYPE) * STREAM_ARRAY_SIZE,
+    3 * sizeof(STREAM_TYPE) * STREAM_ARRAY_SIZE
+};
+
+static STREAM_TYPE a[STREAM_ARRAY_SIZE];
+static STREAM_TYPE b[STREAM_ARRAY_SIZE];
+static STREAM_TYPE c[STREAM_ARRAY_SIZE];
+
 int checktick();
 double mysecond();
 
 int main(int argc, char *argv[])
 {
-    int BytesPerWord;
-    int i, k, nthreads = 0;
-    unsigned long stream_array_size;
+    int BytesPerWord, quantum;
+    int i, j, k, nthreads = 0;
 
-    if(argc == 1 || argc > 2)
-        stream_array_size = STREAM_ARRAY_SIZE;
-    else
-    {
-        stream_array_size = strtoul(argv[1], &argv[1], 10);
-        if(stream_array_size < 1)
-        {
-            printf("[ERROR] The input value is invalid!");
-            return -1;
-        }
-    }
+    MPI_Init(NULL, NULL);
 
-    printf(HLINE);
+    // Get the number of processes
+    int world_size;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
-    printf("STREAM version by Daniele Cesarini\n");
+    // Get the rank of the process
+    int world_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-    printf(HLINE);
+    // Discovery MPI pinnig
+    int mpi_cpu_id = sched_getcpu();
+    int world_mpi_cpu_id[world_size];
+    MPI_Gather(&mpi_cpu_id, 1, MPI_INT, world_mpi_cpu_id, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    BytesPerWord = sizeof(STREAM_TYPE);
-    printf("This system uses %d bytes per array element.\n", BytesPerWord);
-
-    printf(HLINE);
-
-    printf("Each kernel will be executed %d times.\n", NTIMES);
-    printf("The *best* time for each kernel (excluding the first iteration)\n"); 
-    printf("will be used to compute the reported bandwidth.\n");
-
-    printf(HLINE);
-
-    int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
-
-    #pragma omp parallel 
+    // Discovery OpenMP pinnig
+#ifdef _OPENMP
+    int num_threads = 0;
+    #pragma omp parallel shared(num_threads)
         #pragma omp master
-            nthreads = omp_get_num_threads();
-
-    printf("Total number of CPU: %d\n", ncpus);
-    printf("Number of Threads requested = %d\n", nthreads);
-
-    printf(HLINE);
-
-    int cpu_id[nthreads];
-    
-
-    #pragma omp parallel shared(cpu_id)
-    {
-        int tid = omp_get_thread_num();
-        cpu_id[tid] = sched_getcpu();
-    }
-
-    for(i = 0; i < nthreads; i++)
-        printf("Threads ID %d pinned on CPU %d\n", i, cpu_id[i]);
-
-    printf(HLINE);
-
-    // Allocate arrays
-    int array_size = (int) ((double) stream_array_size / (double) nthreads);
-    STREAM_TYPE *a[nthreads], *b[nthreads], *c[nthreads];
-    #pragma omp parallel shared(a, b, c)
-    {
-        int tid = omp_get_thread_num();
-        a[tid] = (STREAM_TYPE *) malloc(sizeof(STREAM_TYPE) * array_size);
-        b[tid] = (STREAM_TYPE *) malloc(sizeof(STREAM_TYPE) * array_size);
-        c[tid] = (STREAM_TYPE *) malloc(sizeof(STREAM_TYPE) * array_size);
-    }
-
-    printf("Memory per array (a,b,c) = %.1f MiB (%.1f GiB).\n", 
-            BytesPerWord * ( (double) array_size / 1024. / 1024.),
-            BytesPerWord * ( (double) array_size / 1024. / 1024. / 1024.));
-    printf("Memory required per threads = %.1f MiB (%.1f GiB).\n",
-	        (3.0 * BytesPerWord) * ((double) array_size / 1024. / 1024.),
-	        (3.0 * BytesPerWord) * ((double) array_size / 1024. / 1024. / 1024.));
-    printf("Total memory required (%d threads) = %.1f MiB (%.1f GiB).\n", nthreads,
-	        (3.0 * BytesPerWord * nthreads) * ((double) array_size / 1024. / 1024.),
-	        (3.0 * BytesPerWord * nthreads) * ((double) array_size / 1024. / 1024. / 1024.));
-    
-    printf(HLINE);
-
-    int quantum;
-    if((quantum = checktick()) >= 1)
-    {
-        printf("Your clock granularity/precision appears to be "
-            "%d microseconds.\n", quantum);
-    }
-    else 
-    {
-        printf("Your clock granularity appears to be "
-            "less than one microsecond.\n");
-	    quantum = 1;
-    }
-
-    printf(HLINE);
-
-    printf("Initialize arrays...\n");
-    #pragma omp parallel shared(a, b, c)
-    {
-        int tid = omp_get_thread_num();
-        for (i = 0; i < array_size; i++)
-        {
-            a[tid][i] = 1.0;
-            b[tid][i] = 2.0;
-            c[tid][i] = 0.0;
-        }
-    }
-
-    printf(HLINE);
-
-    double t = mysecond();
+            num_threads = omp_get_num_threads();
+    int omp_cpu_id[num_threads];
+    int world_omp_cpu_id[world_size][num_threads];
     #pragma omp parallel
     {
         int tid = omp_get_thread_num();
-        for (i = 0; i < array_size; i++)
-		    a[tid][i] = 2.0E0 * a[tid][i];
+        omp_cpu_id[tid] = sched_getcpu();
     }
-    t = 1.0E6 * (mysecond() - t);
+    MPI_Gather(omp_cpu_id, num_threads, MPI_INT, world_omp_cpu_id, num_threads, MPI_INT, 0, MPI_COMM_WORLD);
+#endif
 
-    printf("Each test below will take on the order"
-	       " of %d microseconds.\n", (int) t);
-    printf("Increase the size of the arrays if this shows that\n");
-    printf("you are not getting at least %d microseconds per test.\n", 
-            quantum*100);
+    if(world_rank == 0)
+    {
+        printf(HLINE);
 
-    printf(HLINE);
+        printf("STREAM version by Daniele Cesarini\n");
 
-    printf("WARNING -- The above is only a rough guideline.\n");
-    printf("For best results, please be sure you know the\n");
-    printf("precision of your system timer.\n");
+        printf(HLINE);
 
-    printf(HLINE);
+        BytesPerWord = sizeof(STREAM_TYPE);
+        printf("This system uses %d bytes per array element.\n", BytesPerWord);
+
+        printf(HLINE);
+
+#ifdef _OPENMP
+        printf("OpenMP is enable!\n");
+        printf(HLINE);
+#endif
+
+        printf("Each kernel will be executed %d times.\n", NTIMES);
+        printf("The *best* time for each kernel (excluding the first iteration)\n"); 
+        printf("will be used to compute the reported bandwidth.\n");
+
+        printf(HLINE);
+
+        for(i = 0; i < world_size; i++)
+        {
+            printf("MPI rank %d pinned on CPU %d\n", i, world_mpi_cpu_id[i]);
+#ifdef _OPENMP
+            for(j = 0; j < num_threads; j++)
+                printf("    OpenMP Thread ID %d on CPU %d\n", j, world_omp_cpu_id[i][j]);   
+#endif
+        }
+
+        printf(HLINE);
+
+        printf("Array size = %llu (elements)\n" , 
+            (unsigned long long) STREAM_ARRAY_SIZE);
+        printf("Memory per array = %.1f MiB (%.1f GiB).\n", 
+            BytesPerWord * ((double) STREAM_ARRAY_SIZE / 1024.0 / 1024.0),
+            BytesPerWord * ((double) STREAM_ARRAY_SIZE / 1024.0 / 1024.0 / 1024.0));
+        printf("Memory per MPI Rank = %.1f MiB (%.1f GiB).\n", 
+            (3.0 * BytesPerWord) * ((double) STREAM_ARRAY_SIZE / 1024.0 / 1024.),
+            (3.0 * BytesPerWord) * ((double) STREAM_ARRAY_SIZE / 1024.0 / 1024.0 / 1024.0));
+        printf("Total memory required = %.1f MiB (%.1f GiB).\n",
+            (world_size * 3.0 * BytesPerWord) * ((double) STREAM_ARRAY_SIZE / 1024.0 / 1024.),
+            (world_size * 3.0 * BytesPerWord) * ((double) STREAM_ARRAY_SIZE / 1024.0 / 1024.0 / 1024.0));
+        
+        printf(HLINE);
+
+        if((quantum = checktick()) >= 1)
+        {
+            printf("Your clock granularity/precision appears to be "
+                "%d microseconds.\n", quantum);
+        }
+        else 
+        {
+            printf("Your clock granularity appears to be "
+                "less than one microsecond.\n");
+            quantum = 1;
+        }
+
+        printf(HLINE);
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    if(world_rank == 0)
+    {
+        printf("Initialize arrays...\n");
+        printf(HLINE);
+    }
+
+#ifdef _OPENMP
+    #pragma omp parallel for
+#endif
+    for (i = 0; i < STREAM_ARRAY_SIZE; i++)
+    {
+        a[i] = 1.0;
+        b[i] = 2.0;
+        c[i] = 0.0;
+    }  
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    if(world_rank == 0)
+    {
+        double t = mysecond();
+        for (i = 0; i < STREAM_ARRAY_SIZE; i++)
+            a[i] = 2.0E0 * a[i];
+        t = 1.0E6 * (mysecond() - t);
+
+        printf("Each test below will take on the order"
+            " of %d microseconds.\n", (int) t);
+        printf("Increase the size of the arrays if this shows that\n");
+        printf("you are not getting at least %d microseconds per test.\n", 
+                quantum*100);
+
+        printf(HLINE);
+
+        printf("WARNING -- The above is only a rough guideline.\n");
+        printf("For best results, please be sure you know the\n");
+        printf("precision of your system timer.\n");
+
+        printf(HLINE);
+
+        printf("Start moving data...\n");
+
+        printf(HLINE);
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
 
     double times[4][NTIMES];
     for(k = 0; k < NTIMES; k++)
 	{
         times[0][k] = mysecond();
-        #pragma omp parallel
-        {
-            int tid = omp_get_thread_num();
-            for (i = 0; i < array_size; i++)
-                c[tid][i] = a[tid][i];
-        }
+#ifdef _OPENMP
+        #pragma omp parallel for
+#endif
+        for (i = 0; i < STREAM_ARRAY_SIZE; i++)
+            c[i] = a[i];
         times[0][k] = mysecond() - times[0][k];
 
         times[1][k] = mysecond();
-        #pragma omp parallel
-        {
-            int tid = omp_get_thread_num();
-            for (i = 0; i < array_size; i++)
-                b[tid][i] = SCALAR * c[tid][i];
-        }
+#ifdef _OPENMP
+        #pragma omp parallel for
+#endif
+        for (i = 0; i < STREAM_ARRAY_SIZE; i++)
+            b[i] = SCALAR * c[i];
         times[1][k] = mysecond() - times[1][k];
 
         times[2][k] = mysecond();
-        #pragma omp parallel
-        {
-            int tid = omp_get_thread_num();
-            for (i = 0; i < array_size; i++)
-                c[tid][i] = a[tid][i]+b[tid][i];
-        }
+#ifdef _OPENMP
+        #pragma omp parallel for
+#endif
+        for (i = 0; i < STREAM_ARRAY_SIZE; i++)
+            c[i] = a[i]+b[i];
         times[2][k] = mysecond() - times[2][k];
 
         times[3][k] = mysecond();
-        #pragma omp parallel
-        {
-            int tid = omp_get_thread_num();
-            for (i = 0; i < array_size; i++)
-                a[tid][i] = b[tid][i] + SCALAR * c[tid][i];
-        }
+#ifdef _OPENMP
+        #pragma omp parallel for
+#endif
+        for (i = 0; i < STREAM_ARRAY_SIZE; i++)
+            a[i] = b[i] + SCALAR * c[i];
         times[3][k] = mysecond() - times[3][k];
     }
 
-    double avgtime[4];
+    MPI_Barrier(MPI_COMM_WORLD);
+
     double mintime[4];
     double maxtime[4];
+    double avgtime[4];
+    double bandwidth[4];
+    // Skip first iteration
     for (i = 0; i < 4; i++)
-    {
-        avgtime[i] = times[i][1];
-        mintime[i] = times[i][1];
-        maxtime[i] = times[i][1];
-    }
+        avgtime[i] = mintime[i] = maxtime[i] = times[i][1];
     for(k = 2; k < NTIMES; k++)
 	{
         for (i = 0; i < 4; i++)
         {
-            avgtime[i] = avgtime[i] + times[i][k];
             mintime[i] = MIN(mintime[i], times[i][k]);
             maxtime[i] = MAX(maxtime[i], times[i][k]);
-
+            avgtime[i] = avgtime[i] + times[i][k];
         }
     }
     for (i = 0; i < 4; i++)
-        avgtime[i] = avgtime[i] / (double)(NTIMES-1);
-
-    static double bytes[4];
-    bytes[0] = 2 * sizeof(STREAM_TYPE) * array_size * nthreads;
-    bytes[1] = 2 * sizeof(STREAM_TYPE) * array_size * nthreads;
-    bytes[2] = 3 * sizeof(STREAM_TYPE) * array_size * nthreads;
-    bytes[3] = 3 * sizeof(STREAM_TYPE) * array_size * nthreads;
-
-    printf("Function  Bandwidth (MB/s)  Avg time (s)  Min time (s)  Max time (s)\n");
-    for (i = 0; i < 4; i++) 
     {
-		printf("%s%8.0f  %16.6f  %13.6f  %12.6f\n",
-           label[i],
-	       (bytes[i] / 1024. / 1024.) / mintime[i],
-	       avgtime[i],
-	       mintime[i],
-	       maxtime[i]);
+        avgtime[i] = avgtime[i] / (double)(NTIMES-1);
+        bandwidth[i] = (bytes[i] / 1024.0 / 1024.0) / mintime[i];
     }
 
-    printf(HLINE);
+    double world_mintime[4];
+    double world_maxtime[4];
+    double world_avgtime[4];
+    double world_bandwidth[4]; 
+    MPI_Reduce(mintime, world_mintime, 4, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(maxtime, world_maxtime, 4, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(avgtime, world_avgtime, 4, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(bandwidth, world_bandwidth, 4, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    if(world_rank == 0)
+    {
+        for (i = 0; i < 4; i++)
+            world_avgtime[i] /= world_size;
+
+        printf("Function  Bandwidth (MB/s)  Avg time (s)  Min time (s)  Max time (s)\n");
+        for (i = 0; i < 4; i++) 
+        {
+            printf("%s%8.0f  %16.6f  %13.6f  %12.6f\n",
+            label[i],
+            world_bandwidth[i],
+            world_avgtime[i],
+            world_mintime[i],
+            world_maxtime[i]);
+        }
+    }
+
+    // Finalize the MPI environment.
+    MPI_Finalize();
 
     return 0;
 }
 
-# define M 20
+#define M 20
 int checktick()
 {
     int		i, minDelta, Delta;

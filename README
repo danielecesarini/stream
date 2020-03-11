@@ -1,6 +1,6 @@
 ===============================================
 
-This is an OpenMP implementation of STREAM Benchmark
+This is an MPI/OpenMP implementation of STREAM Benchmark
 by Dr. Daniele Cesarini
 
 ===============================================
