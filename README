@@ -1,0 +1,27 @@
+===============================================
+
+This is an OpenMP implementation of STREAM Benchmark
+by Dr. Daniele Cesarini
+
+===============================================
+
+STREAM is the de facto industry standard benchmark
+for measuring sustained memory bandwidth.
+
+Documentation for STREAM is on the web at:
+   http://www.cs.virginia.edu/stream/ref.html
+
+===============================================
+
+STREAM is a project of "Dr. Bandwidth":
+	John D. McCalpin, Ph.D.
+	john@mccalpin.com
+
+===============================================
+
+The STREAM web and ftp sites are currently hosted at
+the Department of Computer Science at the University of
+Virginia under the generous sponsorship of Professor Bill
+Wulf and Professor Alan Batson.
+
+===============================================
